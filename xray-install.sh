@@ -1,349 +1,342 @@
 #!/bin/bash
 
-# X-UI Pro AutoScript dengan API Client Management
-# Support limit kuota per client
-# Version: 1.0
+# AutoScript X-UI Pro dengan Fitur API
+# Versi: 1.0
+# Penulis: Anonymous
+# Sumber X-UI Pro: https://github.com/GFW4Fun/x-ui-pro
 
+# Warna untuk output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-PURPLE='\033[0;35m'
-CYAN='\033[0;36m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-# Variables
-XUI_PORT=2053
-API_PORT=8080
-DOMAIN=""
-EMAIL=""
-CERT_PATH="/root/cert"
-LOG_FILE="/var/log/xui-install.log"
-
-# Function untuk logging
-log() {
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" | tee -a $LOG_FILE
-}
-
-# Function untuk print colored text
-print_colored() {
-    printf "${2}${1}${NC}\n"
-}
-
-# Function untuk check system requirements
-check_system() {
-    print_colored "Checking system requirements..." $BLUE
-    
-    # Check OS
-    if [[ ! -f /etc/os-release ]]; then
-        print_colored "Error: Cannot detect OS" $RED
-        exit 1
-    fi
-    
-    source /etc/os-release
-    if [[ "$ID" != "ubuntu" && "$ID" != "debian" && "$ID" != "centos" ]]; then
-        print_colored "Error: This script only supports Ubuntu, Debian, and CentOS" $RED
-        exit 1
-    fi
-    
-    # Check if running as root
+# Fungsi untuk memeriksa root
+check_root() {
     if [[ $EUID -ne 0 ]]; then
-        print_colored "Error: This script must be run as root" $RED
+        echo -e "${RED}Error: Script ini harus dijalankan sebagai root${NC}" >&2
+        exit 1
+    fi
+}
+
+# Fungsi untuk memeriksa OS
+check_os() {
+    if [[ -f /etc/redhat-release ]]; then
+        OS="centos"
+    elif grep -Eqi "debian" /etc/issue; then
+        OS="debian"
+    elif grep -Eqi "ubuntu" /etc/issue; then
+        OS="ubuntu"
+    elif grep -Eqi "centos|red hat|redhat" /etc/issue; then
+        OS="centos"
+    elif grep -Eqi "debian" /proc/version; then
+        OS="debian"
+    elif grep -Eqi "ubuntu" /proc/version; then
+        OS="ubuntu"
+    elif grep -Eqi "centos|red hat|redhat" /proc/version; then
+        OS="centos"
+    else
+        echo -e "${RED}OS tidak dikenali. Script ini hanya support Debian, Ubuntu atau CentOS${NC}"
+        exit 1
+    fi
+}
+
+# Fungsi untuk memeriksa arch
+check_arch() {
+    ARCH=$(uname -m)
+    if [[ "$ARCH" == "x86_64" ]]; then
+        ARCH="amd64"
+    elif [[ "$ARCH" == "aarch64" ]]; then
+        ARCH="arm64"
+    else
+        echo -e "${RED}Architecture tidak didukung: $ARCH${NC}"
+        exit 1
+    fi
+}
+
+# Fungsi untuk install dependensi
+install_dependencies() {
+    echo -e "${YELLOW}Menginstall dependensi...${NC}"
+    if [[ "$OS" == "ubuntu" || "$OS" == "debian" ]]; then
+        apt-get update
+        apt-get install -y curl wget socat bash-completion tar zip unzip jq
+    elif [[ "$OS" == "centos" ]]; then
+        yum install -y curl wget socat bash-completion tar zip unzip jq
+    fi
+    
+    # Install certbot jika belum ada
+    if ! command -v certbot &> /dev/null; then
+        echo -e "${YELLOW}Menginstall certbot...${NC}"
+        if [[ "$OS" == "ubuntu" || "$OS" == "debian" ]]; then
+            apt-get install -y certbot
+        elif [[ "$OS" == "centos" ]]; then
+            yum install -y certbot
+        fi
+    fi
+}
+
+# Fungsi untuk install X-UI Pro
+install_xui_pro() {
+    echo -e "${YELLOW}Menginstall X-UI Pro...${NC}"
+    mkdir -p /usr/local/x-ui-pro
+    cd /usr/local/x-ui-pro
+    
+    # Download binary terbaru
+    LATEST_VERSION=$(curl -s https://api.github.com/repos/GFW4Fun/x-ui-pro/releases/latest | grep tag_name | cut -d '"' -f 4)
+    wget -O x-ui-pro.tar.gz "https://github.com/GFW4Fun/x-ui-pro/releases/download/${LATEST_VERSION}/x-ui-pro-linux-${ARCH}.tar.gz"
+    
+    if [[ $? -ne 0 ]]; then
+        echo -e "${RED}Gagal mendownload X-UI Pro${NC}"
         exit 1
     fi
     
-    print_colored "System check passed!" $GREEN
-}
-
-# Function untuk install dependencies
-install_dependencies() {
-    print_colored "Installing dependencies..." $BLUE
+    tar -xzf x-ui-pro.tar.gz
+    rm -f x-ui-pro.tar.gz
+    chmod +x x-ui-pro
     
-    if command -v apt &> /dev/null; then
-        apt update
-        apt install -y curl wget unzip socat cron nginx python3 python3-pip sqlite3
-    elif command -v yum &> /dev/null; then
-        yum update -y
-        yum install -y curl wget unzip socat crontabs nginx python3 python3-pip sqlite
-    fi
-    
-    # Install Python packages
-    pip3 install flask flask-cors requests
-    
-    print_colored "Dependencies installed!" $GREEN
-}
-
-# Function untuk install x-ui-pro
-install_xui() {
-    print_colored "Installing X-UI Pro..." $BLUE
-    
-    # Download dan install x-ui-pro
-    bash <(curl -Ls https://raw.githubusercontent.com/GFW4Fun/x-ui-pro/main/install.sh)
-    
-    # Configure x-ui
-    /usr/local/x-ui/x-ui setting -port $XUI_PORT
-    /usr/local/x-ui/x-ui setting -username admin
-    /usr/local/x-ui/x-ui setting -password admin123
-    
-    # Start x-ui service
-    systemctl enable x-ui
-    systemctl start x-ui
-    
-    print_colored "X-UI Pro installed successfully!" $GREEN
-}
-
-# Function untuk setup SSL certificate
-setup_ssl() {
-    if [[ -z "$DOMAIN" ]]; then
-        print_colored "Domain not provided, skipping SSL setup" $YELLOW
-        return
-    fi
-    
-    print_colored "Setting up SSL certificate..." $BLUE
-    
-    # Install acme.sh
-    curl https://get.acme.sh | sh
-    source ~/.bashrc
-    
-    # Create cert directory
-    mkdir -p $CERT_PATH
-    
-    # Get certificate
-    ~/.acme.sh/acme.sh --register-account -m $EMAIL
-    ~/.acme.sh/acme.sh --issue -d $DOMAIN --standalone
-    ~/.acme.sh/acme.sh --installcert -d $DOMAIN --key-file $CERT_PATH/private.key --fullchain-file $CERT_PATH/cert.crt
-    
-    print_colored "SSL certificate installed!" $GREEN
-}
-
-# Function untuk create API server
-create_api_server() {
-    print_colored "Creating API server..." $BLUE
-    
-    cat > /opt/xui-api.py << 'EOF'
-#!/usr/bin/env python3
-import json
-import sqlite3
-import requests
-import hashlib
-from datetime import datetime, timedelta
-from flask import Flask, request, jsonify
-from flask_cors import CORS
-import subprocess
-import os
-
-app = Flask(__name__)
-CORS(app)
-
-# Database setup
-DB_PATH = '/opt/xui_clients.db'
-XUI_DB_PATH = '/etc/x-ui/x-ui.db'
-
-def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS clients (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            email TEXT,
-            quota_gb INTEGER DEFAULT 0,
-            used_gb REAL DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            expires_at TIMESTAMP,
-            is_active BOOLEAN DEFAULT 1,
-            xui_inbound_id INTEGER
-        )
-    ''')
-    conn.commit()
-    conn.close()
-
-def get_client_usage(client_id):
-    """Get client traffic usage from x-ui database"""
-    try:
-        conn = sqlite3.connect(XUI_DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute('SELECT up, down FROM client_traffics WHERE inbound_id = ?', (client_id,))
-        result = cursor.fetchone()
-        conn.close()
-        
-        if result:
-            up_bytes, down_bytes = result
-            total_gb = (up_bytes + down_bytes) / (1024**3)  # Convert to GB
-            return total_gb
-        return 0
-    except:
-        return 0
-
-@app.route('/api/clients', methods=['GET'])
-def get_clients():
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute('SELECT * FROM clients')
-    clients = cursor.fetchall()
-    conn.close()
-    
-    result = []
-    for client in clients:
-        client_dict = {
-            'id': client[0],
-            'username': client[1],
-            'email': client[2],
-            'quota_gb': client[3],
-            'used_gb': get_client_usage(client[8]) if client[8] else 0,
-            'created_at': client[5],
-            'expires_at': client[6],
-            'is_active': bool(client[7]),
-            'xui_inbound_id': client[8]
-        }
-        result.append(client_dict)
-    
-    return jsonify({'success': True, 'data': result})
-
-@app.route('/api/clients', methods=['POST'])
-def create_client():
-    data = request.json
-    username = data.get('username')
-    email = data.get('email', '')
-    quota_gb = data.get('quota_gb', 10)
-    expires_days = data.get('expires_days', 30)
-    
-    if not username:
-        return jsonify({'success': False, 'message': 'Username required'})
-    
-    expires_at = datetime.now() + timedelta(days=expires_days)
-    
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute('''
-            INSERT INTO clients (username, email, quota_gb, expires_at)
-            VALUES (?, ?, ?, ?)
-        ''', (username, email, quota_gb, expires_at))
-        client_id = cursor.lastrowid
-        conn.commit()
-        conn.close()
-        
-        return jsonify({
-            'success': True,
-            'message': 'Client created successfully',
-            'client_id': client_id
-        })
-    except sqlite3.IntegrityError:
-        return jsonify({'success': False, 'message': 'Username already exists'})
-
-@app.route('/api/clients/<int:client_id>', methods=['PUT'])
-def update_client(client_id):
-    data = request.json
-    
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    # Update fields
-    if 'quota_gb' in data:
-        cursor.execute('UPDATE clients SET quota_gb = ? WHERE id = ?', 
-                      (data['quota_gb'], client_id))
-    
-    if 'is_active' in data:
-        cursor.execute('UPDATE clients SET is_active = ? WHERE id = ?', 
-                      (data['is_active'], client_id))
-    
-    conn.commit()
-    conn.close()
-    
-    return jsonify({'success': True, 'message': 'Client updated successfully'})
-
-@app.route('/api/clients/<int:client_id>', methods=['DELETE'])
-def delete_client(client_id):
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute('DELETE FROM clients WHERE id = ?', (client_id,))
-    conn.commit()
-    conn.close()
-    
-    return jsonify({'success': True, 'message': 'Client deleted successfully'})
-
-@app.route('/api/clients/<int:client_id>/reset-usage', methods=['POST'])
-def reset_client_usage(client_id):
-    """Reset client traffic usage"""
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute('SELECT xui_inbound_id FROM clients WHERE id = ?', (client_id,))
-        result = cursor.fetchone()
-        conn.close()
-        
-        if result and result[0]:
-            xui_inbound_id = result[0]
-            # Reset traffic in x-ui database
-            conn = sqlite3.connect(XUI_DB_PATH)
-            cursor = conn.cursor()
-            cursor.execute('UPDATE client_traffics SET up = 0, down = 0 WHERE inbound_id = ?', 
-                          (xui_inbound_id,))
-            conn.commit()
-            conn.close()
-            
-            return jsonify({'success': True, 'message': 'Client usage reset successfully'})
-        else:
-            return jsonify({'success': False, 'message': 'Client not found or not linked to x-ui'})
-    except Exception as e:
-        return jsonify({'success': False, 'message': str(e)})
-
-@app.route('/api/system/status', methods=['GET'])
-def system_status():
-    # Get system information
-    try:
-        # Get disk usage
-        disk_usage = subprocess.check_output(['df', '-h', '/']).decode().split('\n')[1].split()
-        
-        # Get memory usage
-        mem_info = subprocess.check_output(['free', '-h']).decode().split('\n')[1].split()
-        
-        # Get x-ui status
-        xui_status = subprocess.run(['systemctl', 'is-active', 'x-ui'], 
-                                   capture_output=True, text=True).stdout.strip()
-        
-        return jsonify({
-            'success': True,
-            'data': {
-                'disk_usage': {
-                    'total': disk_usage[1],
-                    'used': disk_usage[2],
-                    'available': disk_usage[3],
-                    'percentage': disk_usage[4]
-                },
-                'memory': {
-                    'total': mem_info[1],
-                    'used': mem_info[2],
-                    'free': mem_info[3]
-                },
-                'xui_status': xui_status,
-                'timestamp': datetime.now().isoformat()
-            }
-        })
-    except Exception as e:
-        return jsonify({'success': False, 'message': str(e)})
-
-if __name__ == '__main__':
-    init_db()
-    app.run(host='0.0.0.0', port=8080, debug=False)
-EOF
-
-    chmod +x /opt/xui-api.py
-    
-    # Create systemd service for API
-    cat > /etc/systemd/system/xui-api.service << EOF
+    # Buat service
+    cat > /etc/systemd/system/x-ui-pro.service <<EOF
 [Unit]
-Description=X-UI API Server
+Description=X-UI Pro Service
 After=network.target
 
 [Service]
 Type=simple
-User=root
-WorkingDirectory=/opt
-ExecStart=/usr/bin/python3 /opt/xui-api.py
-Restart=always
-RestartSec=3
+WorkingDirectory=/usr/local/x-ui-pro
+ExecStart=/usr/local/x-ui-pro/x-ui-pro
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable x-ui-pro
+    systemctl start x-ui-pro
+    
+    echo -e "${GREEN}X-UI Pro berhasil diinstall dan dijalankan${NC}"
+}
+
+# Fungsi untuk install API tambahan
+install_api() {
+    echo -e "${YELLOW}Menginstall API tambahan...${NC}"
+    cd /usr/local/x-ui-pro
+    
+    # Buat direktori untuk API
+    mkdir -p api
+    cd api
+    
+    # Buat file konfigurasi API
+    cat > config.json <<EOF
+{
+    "api_port": 54321,
+    "api_secret": "$(openssl rand -hex 16)",
+    "xui_path": "/usr/local/x-ui-pro",
+    "xui_config": "/usr/local/x-ui-pro/config.json"
+}
+EOF
+
+    # Buat script API
+    cat > xui-api.sh <<'EOF'
+#!/bin/bash
+
+# API untuk X-UI Pro
+# Endpoint untuk manajemen client dan kuota
+
+CONFIG_FILE="/usr/local/x-ui-pro/api/config.json"
+API_PORT=$(jq -r '.api_port' $CONFIG_FILE)
+API_SECRET=$(jq -r '.api_secret' $CONFIG_FILE)
+XUI_CONFIG=$(jq -r '.xui_config' $CONFIG_FILE)
+
+# Fungsi untuk response JSON
+json_response() {
+    local status=$1
+    local message=$2
+    local data=$3
+    
+    jq -n \
+        --arg status "$status" \
+        --arg message "$message" \
+        --argjson data "$data" \
+        '{status: $status, message: $message, data: $data}'
+}
+
+# Fungsi untuk validasi secret
+validate_secret() {
+    local secret=$1
+    if [[ "$secret" != "$API_SECRET" ]]; then
+        json_response "error" "Invalid API secret" "null"
+        exit 1
+    fi
+}
+
+# Fungsi untuk menambahkan client
+add_client() {
+    local secret=$1
+    local email=$2
+    local quota=$3
+    local inbound_tag=$4
+    
+    validate_secret "$secret"
+    
+    # Cek apakah client sudah ada
+    if jq -e ".inbounds[] | select(.tag == \"$inbound_tag\") | .settings.clients[] | select(.email == \"$email\")" "$XUI_CONFIG" > /dev/null; then
+        json_response "error" "Client already exists" "null"
+        return
+    fi
+    
+    # Tambahkan client
+    UUID=$(uuidgen)
+    jq --arg tag "$inbound_tag" \
+       --arg email "$email" \
+       --arg uuid "$UUID" \
+       --arg quota "$quota" \
+       '(.[] | select(.tag == $tag) | .settings.clients) += [{"id": $uuid, "email": $email, "quota": $quota|tonumber}]' \
+       "$XUI_CONFIG" > "$XUI_CONFIG.tmp" && mv "$XUI_CONFIG.tmp" "$XUI_CONFIG"
+    
+    if [[ $? -eq 0 ]]; then
+        json_response "success" "Client added successfully" "{\"email\":\"$email\",\"uuid\":\"$UUID\",\"quota\":$quota}"
+        # Restart x-ui-pro untuk menerapkan perubahan
+        systemctl restart x-ui-pro
+    else
+        json_response "error" "Failed to add client" "null"
+    fi
+}
+
+# Fungsi untuk menghapus client
+delete_client() {
+    local secret=$1
+    local email=$2
+    local inbound_tag=$3
+    
+    validate_secret "$secret"
+    
+    # Hapus client
+    jq --arg tag "$inbound_tag" \
+       --arg email "$email" \
+       '.[] | select(.tag == $tag) | .settings.clients |= map(select(.email != $email))' \
+       "$XUI_CONFIG" > "$XUI_CONFIG.tmp" && mv "$XUI_CONFIG.tmp" "$XUI_CONFIG"
+    
+    if [[ $? -eq 0 ]]; then
+        json_response "success" "Client deleted successfully" "{\"email\":\"$email\"}"
+        # Restart x-ui-pro untuk menerapkan perubahan
+        systemctl restart x-ui-pro
+    else
+        json_response "error" "Failed to delete client" "null"
+    fi
+}
+
+# Fungsi untuk update kuota client
+update_quota() {
+    local secret=$1
+    local email=$2
+    local quota=$3
+    local inbound_tag=$4
+    
+    validate_secret "$secret"
+    
+    # Update kuota
+    jq --arg tag "$inbound_tag" \
+       --arg email "$email" \
+       --arg quota "$quota" \
+       '(.[] | select(.tag == $tag) | .settings.clients[] | select(.email == $email)).quota = ($quota|tonumber)' \
+       "$XUI_CONFIG" > "$XUI_CONFIG.tmp" && mv "$XUI_CONFIG.tmp" "$XUI_CONFIG"
+    
+    if [[ $? -eq 0 ]]; then
+        json_response "success" "Quota updated successfully" "{\"email\":\"$email\",\"quota\":$quota}"
+        # Restart x-ui-pro untuk menerapkan perubahan
+        systemctl restart x-ui-pro
+    else
+        json_response "error" "Failed to update quota" "null"
+    fi
+}
+
+# Fungsi untuk mendapatkan info client
+get_client_info() {
+    local secret=$1
+    local email=$2
+    local inbound_tag=$3
+    
+    validate_secret "$secret"
+    
+    # Dapatkan info client
+    CLIENT_INFO=$(jq -c ".[] | select(.tag == \"$inbound_tag\") | .settings.clients[] | select(.email == \"$email\")" "$XUI_CONFIG")
+    
+    if [[ -n "$CLIENT_INFO" ]]; then
+        json_response "success" "Client found" "$CLIENT_INFO"
+    else
+        json_response "error" "Client not found" "null"
+    fi
+}
+
+# Main server
+while true; do
+    echo -e "HTTP/1.1 200 OK\nContent-Type: application/json\n\n" | nc -l -p $API_PORT | (
+        read -r REQUEST
+        
+        # Parse request
+        METHOD=$(echo "$REQUEST" | awk '{print $1}')
+        PATH=$(echo "$REQUEST" | awk '{print $2}')
+        
+        # Baca body jika ada
+        if [[ "$METHOD" == "POST" ]]; then
+            while read -r line; do
+                [ -z "$line" ] && break
+            done
+            read -r -t 1 -N $CONTENT_LENGTH BODY
+        fi
+        
+        # Handle endpoint
+        case "$PATH" in
+            "/api/add_client")
+                SECRET=$(echo "$BODY" | jq -r '.secret')
+                EMAIL=$(echo "$BODY" | jq -r '.email')
+                QUOTA=$(echo "$BODY" | jq -r '.quota')
+                INBOUND_TAG=$(echo "$BODY" | jq -r '.inbound_tag')
+                add_client "$SECRET" "$EMAIL" "$QUOTA" "$INBOUND_TAG"
+                ;;
+            "/api/delete_client")
+                SECRET=$(echo "$BODY" | jq -r '.secret')
+                EMAIL=$(echo "$BODY" | jq -r '.email')
+                INBOUND_TAG=$(echo "$BODY" | jq -r '.inbound_tag')
+                delete_client "$SECRET" "$EMAIL" "$INBOUND_TAG"
+                ;;
+            "/api/update_quota")
+                SECRET=$(echo "$BODY" | jq -r '.secret')
+                EMAIL=$(echo "$BODY" | jq -r '.email')
+                QUOTA=$(echo "$BODY" | jq -r '.quota')
+                INBOUND_TAG=$(echo "$BODY" | jq -r '.inbound_tag')
+                update_quota "$SECRET" "$EMAIL" "$QUOTA" "$INBOUND_TAG"
+                ;;
+            "/api/get_client_info")
+                SECRET=$(echo "$BODY" | jq -r '.secret')
+                EMAIL=$(echo "$BODY" | jq -r '.email')
+                INBOUND_TAG=$(echo "$BODY" | jq -r '.inbound_tag')
+                get_client_info "$SECRET" "$EMAIL" "$INBOUND_TAG"
+                ;;
+            *)
+                json_response "error" "Invalid endpoint" "null"
+                ;;
+        esac
+    )
+done
+EOF
+
+    chmod +x xui-api.sh
+    
+    # Buat service untuk API
+    cat > /etc/systemd/system/xui-api.service <<EOF
+[Unit]
+Description=X-UI Pro API Service
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/usr/local/x-ui-pro/api
+ExecStart=/usr/local/x-ui-pro/api/xui-api.sh
+Restart=on-failure
+RestartSec=5s
 
 [Install]
 WantedBy=multi-user.target
@@ -353,151 +346,37 @@ EOF
     systemctl enable xui-api
     systemctl start xui-api
     
-    print_colored "API server created and started!" $GREEN
+    # Dapatkan secret dari config
+    API_SECRET=$(jq -r '.api_secret' /usr/local/x-ui-pro/api/config.json)
+    
+    echo -e "${GREEN}API berhasil diinstall${NC}"
+    echo -e "${YELLOW}API Secret: $API_SECRET${NC}"
+    echo -e "${YELLOW}API Port: 54321${NC}"
+    echo -e "${YELLOW}Endpoint:${NC}"
+    echo -e "  - POST /api/add_client"
+    echo -e "  - POST /api/delete_client"
+    echo -e "  - POST /api/update_quota"
+    echo -e "  - POST /api/get_client_info"
 }
 
-# Function untuk create monitoring script
-create_monitoring() {
-    print_colored "Creating monitoring script..." $BLUE
-    
-    cat > /opt/quota-monitor.py << 'EOF'
-#!/usr/bin/env python3
-import sqlite3
-import subprocess
-from datetime import datetime
-
-DB_PATH = '/opt/xui_clients.db'
-XUI_DB_PATH = '/etc/x-ui/x-ui.db'
-
-def check_quota_limits():
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute('SELECT id, username, quota_gb, xui_inbound_id FROM clients WHERE is_active = 1')
-    clients = cursor.fetchall()
-    conn.close()
-    
-    for client in clients:
-        client_id, username, quota_gb, xui_inbound_id = client
-        
-        if not xui_inbound_id:
-            continue
-            
-        # Get current usage
-        try:
-            xui_conn = sqlite3.connect(XUI_DB_PATH)
-            xui_cursor = xui_conn.cursor()
-            xui_cursor.execute('SELECT up, down FROM client_traffics WHERE inbound_id = ?', (xui_inbound_id,))
-            result = xui_cursor.fetchone()
-            xui_conn.close()
-            
-            if result:
-                up_bytes, down_bytes = result
-                used_gb = (up_bytes + down_bytes) / (1024**3)
-                
-                # Check if quota exceeded
-                if used_gb >= quota_gb:
-                    print(f"Client {username} exceeded quota: {used_gb:.2f}GB / {quota_gb}GB")
-                    
-                    # Disable client in x-ui (you can implement this based on x-ui API)
-                    # For now, just mark as inactive in our database
-                    conn = sqlite3.connect(DB_PATH)
-                    cursor = conn.cursor()
-                    cursor.execute('UPDATE clients SET is_active = 0 WHERE id = ?', (client_id,))
-                    conn.commit()
-                    conn.close()
-                    
-        except Exception as e:
-            print(f"Error checking client {username}: {e}")
-
-if __name__ == '__main__':
-    check_quota_limits()
-EOF
-
-    chmod +x /opt/quota-monitor.py
-    
-    # Add to crontab (check every 10 minutes)
-    (crontab -l 2>/dev/null; echo "*/10 * * * * /usr/bin/python3 /opt/quota-monitor.py") | crontab -
-    
-    print_colored "Monitoring script created!" $GREEN
-}
-
-# Function untuk setup firewall
-setup_firewall() {
-    print_colored "Configuring firewall..." $BLUE
-    
-    # Install ufw if not present
-    if ! command -v ufw &> /dev/null; then
-        if command -v apt &> /dev/null; then
-            apt install -y ufw
-        else
-            yum install -y ufw
-        fi
-    fi
-    
-    # Configure firewall rules
-    ufw --force reset
-    ufw default deny incoming
-    ufw default allow outgoing
-    ufw allow ssh
-    ufw allow $XUI_PORT
-    ufw allow $API_PORT
-    ufw allow 80
-    ufw allow 443
-    ufw --force enable
-    
-    print_colored "Firewall configured!" $GREEN
-}
-
-# Function untuk show installation summary
-show_summary() {
-    print_colored "\n=== Installation Summary ===" $CYAN
-    print_colored "X-UI Pro Panel:" $GREEN
-    print_colored "URL: http://$(curl -s ipinfo.io/ip):$XUI_PORT" $WHITE
-    print_colored "Username: admin" $WHITE
-    print_colored "Password: admin123" $WHITE
-    print_colored "" $WHITE
-    print_colored "API Server:" $GREEN
-    print_colored "URL: http://$(curl -s ipinfo.io/ip):$API_PORT" $WHITE
-    print_colored "" $WHITE
-    print_colored "API Endpoints:" $YELLOW
-    print_colored "GET  /api/clients - List all clients" $WHITE
-    print_colored "POST /api/clients - Create new client" $WHITE
-    print_colored "PUT  /api/clients/<id> - Update client" $WHITE
-    print_colored "DELETE /api/clients/<id> - Delete client" $WHITE
-    print_colored "POST /api/clients/<id>/reset-usage - Reset client usage" $WHITE
-    print_colored "GET  /api/system/status - System status" $WHITE
-    print_colored "" $WHITE
-    print_colored "Log file: $LOG_FILE" $WHITE
-    print_colored "==============================\n" $CYAN
-}
-
-# Main installation function
+# Fungsi utama
 main() {
-    print_colored "Starting X-UI Pro AutoScript Installation..." $BLUE
+    check_root
+    check_os
+    check_arch
     
-    # Get domain and email from user
-    read -p "Enter domain (optional, press enter to skip): " DOMAIN
-    if [[ -n "$DOMAIN" ]]; then
-        read -p "Enter email for SSL certificate: " EMAIL
-    fi
+    echo -e "${GREEN}Memulai instalasi X-UI Pro dengan API${NC}"
     
-    check_system
     install_dependencies
-    install_xui
+    install_xui_pro
+    install_api
     
-    if [[ -n "$DOMAIN" && -n "$EMAIL" ]]; then
-        setup_ssl
-    fi
-    
-    create_api_server
-    create_monitoring
-    setup_firewall
-    
-    log "Installation completed successfully"
-    show_summary
+    echo -e "${GREEN}Instalasi selesai!${NC}"
+    echo -e "${YELLOW}Anda dapat mengakses X-UI Pro melalui browser:${NC}"
+    echo -e "  - http://<IP_VPS>:54321 (X-UI Pro)"
+    echo -e "  - http://<IP_VPS>:54321/api (API Endpoint)"
+    echo -e "${YELLOW}Jangan lupa untuk mengubah password default dan port jika diperlukan${NC}"
 }
 
-# Check if script is being run directly
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    main "$@"
-fi
+# Jalankan fungsi utama
+main
