@@ -39,7 +39,7 @@ systemctl enable nginx
 
 # Install Xray
 echo -e "${BLUE}Menginstal Xray...${NC}"
-bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
+bash -c "$(curl -L https://raw.githubusercontent.com/FD-ZENN/OPENSOURCE-AUTOSCRIPT-XRAY/main/xray-install.sh)" @ install
 
 # Install acme.sh for SSL
 echo -e "${BLUE}Menginstal acme.sh...${NC}"
