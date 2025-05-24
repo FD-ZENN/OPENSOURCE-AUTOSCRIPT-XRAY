@@ -49,13 +49,13 @@ Autoscript untuk install dan konfigurasi Xray dengan multiple protocol, reverse 
 
 ### One-Line Install
 ```bash
-bash <(curl -s https://raw.githubusercontent.com/FD-ZENN/OPENSOURCE-AUTOSCRIPT-XRAY/main/install-xray.sh)
+bash <(curl -s https://raw.githubusercontent.com/FD-ZENN/OPENSOURCE-AUTOSCRIPT-XRAY/main/xray-install.sh)
 ```
 
 ### Manual Install
 ```bash
 # Download script
-wget -O xray-install.sh https://raw.githubusercontent.com/FD-ZENN/OPENSOURCE-AUTOSCRIPT-XRAY/main/install-xray.sh
+wget -O xray-install.sh https://raw.githubusercontent.com/FD-ZENN/OPENSOURCE-AUTOSCRIPT-XRAY/main/xray-install.sh
 
 # Make executable
 chmod +x xray-install.sh
